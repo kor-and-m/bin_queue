@@ -1,90 +1,93 @@
 defmodule BinomialQueue do
   @moduledoc false
+  alias BinomialQueue.Node
+  import BinomialQueue.Node, only: [queue_node: 1, queue_node: 2]
 
   defstruct [:queue]
 
-  @type node(t) :: {t, non_neg_integer(), [node(t)]}
+  @type node(t) :: Node.t(t)
   @type queue(t) :: %__MODULE__{queue: [node(t)]}
 
   @spec new() :: queue(any())
   def new(), do: %__MODULE__{queue: []}
 
-  @spec from_list([t]) :: queue(t) when t: any()
-  def from_list(l), do: Enum.reduce(l, new(), fn val, queue -> insert(queue, val) end)
+  @spec from_list([{t, any()}]) :: queue(t) when t: any()
+  def from_list(l),
+    do: Enum.reduce(l, new(), fn {val, order}, queue -> insert(queue, val, order) end)
+
+  @spec update_min(queue(t), (t -> t)) :: queue(t) when t: any()
+  def update_min(%__MODULE__{queue: []} = q, _f), do: q
+
+  def update_min(q, f) do
+    min = Enum.min_by(q.queue, fn queue_node(order: order) -> order end)
+    queue_node(data: min_data) = min
+    new_min = queue_node(min, data: f.(min_data))
+    [new_min | Enum.filter(q.queue, fn m -> m !== min end)]
+  end
 
   @spec get_min(queue(t)) :: t | nil when t: any()
   def get_min(%__MODULE__{queue: []}), do: nil
 
   def get_min(queue) do
-    {min, _, _} = Enum.min_by(queue.queue, fn {min, _, _} -> min end)
-    min
+    queue_node(data: min_data) =
+      Enum.min_by(queue.queue, fn queue_node(order: order) -> order end)
+
+    min_data
   end
 
-  @spec insert(queue(t), t) :: queue(t) when t: any
-  def insert(queue, elem), do: insert_node(queue, {elem, 0, []})
+  @spec insert(queue(t), t, any()) :: queue(t) when t: any
+  def insert(queue, elem, order), do: insert_node(queue, Node.new(elem, order))
 
   @spec delete_min(queue(t)) :: queue(t) when t: any
   def delete_min(%__MODULE__{queue: []} = q), do: q
 
   def delete_min(queue) do
-    min = Enum.min_by(queue.queue, fn {min, _, _} -> min end)
-    {data, _, children} = min
+    data = Enum.min_by(queue.queue, fn queue_node(order: order) -> order end)
 
     meld_queues(
-      %__MODULE__{queue: Enum.filter(queue.queue, fn {d, _, _} -> d !== data end)},
-      %__MODULE__{queue: Enum.reverse(children)}
+      %__MODULE__{queue: Enum.filter(queue.queue, fn q -> q !== data end)},
+      %__MODULE__{queue: Enum.reverse(queue_node(data, :children))}
     )
   end
 
-  @spec link(node(t), node(t)) :: node(t) when t: any()
-  defp link(one, other) do
-    case {one, other} do
-      {{min_one, rank, children}, {min_other, _, _}} when min_one < min_other ->
-        {min_one, rank + 1, [other | children]}
-
-      {_, {min_other, rank, children}} ->
-        {min_other, rank + 1, [one | children]}
-    end
-  end
-
   @spec insert_node(queue(t), node(t)) :: queue(t) when t: any()
-  defp insert_node(queue, {_, rank, _} = node) do
+  defp insert_node(queue, queue_node(rank: rank) = node) do
     case queue.queue do
       [] ->
         %__MODULE__{queue: [node]}
 
-      [{_, first_rank, _} | _] when rank < first_rank ->
+      [queue_node(rank: first_rank) | _] when rank < first_rank ->
         %__MODULE__{queue: [node | queue.queue]}
 
       [first | tail] ->
-        linked = link(first, node)
+        linked = Node.link(first, node)
         insert_node(%__MODULE__{queue: tail}, linked)
     end
   end
 
   @spec meld_queues(queue(t), queue(t)) :: queue(t) when t: any()
-  defp meld_queues(%__MODULE__{queue: []}, q2), do: q2
-  defp meld_queues(q1, %__MODULE__{queue: []}), do: q1
+  def meld_queues(%__MODULE__{queue: []}, q2), do: q2
+  def meld_queues(q1, %__MODULE__{queue: []}), do: q1
 
-  defp meld_queues(
-         %__MODULE__{queue: [{_, rank_q1, _}]} = q1,
-         %__MODULE__{queue: [{_, rank_q2, _} | _]} = q2
-       )
-       when rank_q1 < rank_q2 do
+  def meld_queues(
+        %__MODULE__{queue: [queue_node(rank: n1_rank) | _]} = q1,
+        %__MODULE__{queue: [queue_node(rank: n2_rank) | _]} = q2
+      )
+      when n1_rank < n2_rank do
     meld_queues(q2, q1)
   end
 
-  defp meld_queues(%__MODULE__{queue: [{_, rank_q1, _} | _]} = q1, %__MODULE__{
-         queue: [{_, rank_q2, _} = n2 | children]
-       })
-       when rank_q1 > rank_q2 do
+  def meld_queues(%__MODULE__{queue: [queue_node(rank: n1_rank) | _]} = q1, %__MODULE__{
+        queue: [queue_node(rank: n2_rank) = n2 | children]
+      })
+      when n1_rank > n2_rank do
     %__MODULE__{queue: [n2 | meld_queues(%__MODULE__{queue: children}, q1).queue]}
   end
 
-  defp meld_queues(%__MODULE__{queue: [n1 | children_q1]}, %__MODULE__{queue: [n2 | children_q2]}) do
+  def meld_queues(%__MODULE__{queue: [n1 | children_q1]}, %__MODULE__{queue: [n2 | children_q2]}) do
     insert_node(
       meld_queues(%__MODULE__{queue: children_q1}, %__MODULE__{queue: children_q2}),
-      link(n1, n2)
+      Node.link(n1, n2)
     )
   end
 end
@@ -119,40 +122,5 @@ defimpl Enumerable, for: BinomialQueue do
     h = BinomialQueue.get_min(q)
     t = BinomialQueue.delete_min(q)
     reduce(t, fun.(h, acc), fun)
-  end
-end
-
-defmodule BinomialQueue.Bench do
-  def run() do
-    l =
-      1..1_000_000
-      |> Enum.map(fn _x -> {:rand.uniform(2), :rand.uniform(1_000_000_000)} end)
-      |> Enum.uniq()
-
-    Benchee.run(
-      %{
-        "binomial" => fn ->
-          Enum.reduce(l, BinomialQueue.new(), fn
-            {1, v}, q -> BinomialQueue.insert(q, v)
-            {2, _}, q -> BinomialQueue.delete_min(q)
-          end)
-        end,
-        "list" => fn ->
-          Enum.reduce(l, [], fn
-            {1, v}, acc ->
-              [v | acc]
-
-            {2, _}, [] ->
-              []
-
-            {2, _}, acc ->
-              [_h | t] = Enum.sort(acc)
-              t
-          end)
-        end
-      },
-      time: 10,
-      memory_time: 2
-    )
   end
 end
